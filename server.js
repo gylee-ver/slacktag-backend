@@ -9,6 +9,7 @@ app.use(express.json());
 app.use(cors());
 
 const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN;
+const PORT = process.env.PORT || 3000;  // Render가 자동으로 PORT를 할당할 수 있도록 설정
 
 app.post("/tag-members", async (req, res) => {
     const { messageLink } = req.body;
@@ -27,6 +28,8 @@ app.post("/tag-members", async (req, res) => {
             params: { channel: channelId }
         });
 
+        if (!membersRes.data.ok) throw new Error("Slack API 호출 실패");
+
         const members = membersRes.data.members.map(user => `<@${user}>`).join(" ");
         
         // 스레드에 멘션 메시지 추가
@@ -44,9 +47,13 @@ app.post("/tag-members", async (req, res) => {
         res.json({ message: "태그 완료!" });
 
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "오류 발생!" });
+        console.error("오류 발생:", error?.response?.data || error);
+        res.status(500).json({ message: "오류 발생!", error: error?.response?.data || error.message });
     }
 });
 
-app.listen(3000, () => console.log("서버 실행 중..."));
+app.get("/", (req, res) => {
+    res.send("백엔드 서버가 정상적으로 실행 중입니다!");
+});
+
+app.listen(PORT, () => console.log(`✅ 서버 실행 중 (PORT: ${PORT})`));

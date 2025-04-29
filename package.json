@@ -3,6 +3,7 @@
     "version": "1.0.0",
     "description": "Slack 태그 자동화 백엔드",
     "main": "server.js",
+    "type": "module",
     "scripts": {
       "start": "node server.js"
     },

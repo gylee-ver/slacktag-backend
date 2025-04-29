@@ -8,11 +8,51 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+// 토큰 유효성 검사
 const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN;
-const PORT = process.env.PORT || 3000;  // Render가 자동으로 PORT를 할당할 수 있도록 설정
+if (!SLACK_TOKEN) {
+    console.error("❌ SLACK_BOT_TOKEN이 설정되지 않았습니다!");
+    process.exit(1);
+}
+
+const PORT = process.env.PORT || 3000;
+
+// 토큰 테스트 함수
+async function testSlackToken() {
+    try {
+        const response = await axios.get("https://slack.com/api/auth.test", {
+            headers: { Authorization: `Bearer ${SLACK_TOKEN}` }
+        });
+        
+        if (!response.data.ok) {
+            console.error("❌ Slack 토큰 테스트 실패:", response.data.error);
+            return false;
+        }
+        
+        console.log("✅ Slack 토큰 테스트 성공!");
+        console.log("봇 사용자:", response.data.user);
+        console.log("팀:", response.data.team);
+        return true;
+    } catch (error) {
+        console.error("❌ Slack 토큰 테스트 중 오류:", error.message);
+        return false;
+    }
+}
+
+// 서버 시작 시 토큰 테스트
+testSlackToken().then(isValid => {
+    if (!isValid) {
+        console.error("❌ Slack 토큰이 유효하지 않습니다. 서버를 종료합니다.");
+        process.exit(1);
+    }
+});
 
 app.post("/tag-members", async (req, res) => {
     const { messageLink } = req.body;
+
+    if (!messageLink) {
+        return res.status(400).json({ message: "메시지 링크가 필요합니다." });
+    }
 
     // 메시지 링크에서 채널 ID와 timestamp 추출
     const match = messageLink.match(/archives\/(.*?)\/p(\d+)/);
@@ -28,12 +68,15 @@ app.post("/tag-members", async (req, res) => {
             params: { channel: channelId }
         });
 
-        if (!membersRes.data.ok) throw new Error("Slack API 호출 실패");
+        if (!membersRes.data.ok) {
+            console.error("Slack API 호출 실패:", membersRes.data.error);
+            throw new Error(`Slack API 호출 실패: ${membersRes.data.error}`);
+        }
 
         const members = membersRes.data.members.map(user => `<@${user}>`).join(" ");
         
         // 스레드에 멘션 메시지 추가
-        await axios.post("https://slack.com/api/chat.postMessage", {
+        const postRes = await axios.post("https://slack.com/api/chat.postMessage", {
             channel: channelId,
             thread_ts: threadTs,
             text: `모두를 태그합니다! ${members}`
@@ -44,16 +87,32 @@ app.post("/tag-members", async (req, res) => {
             }
         });
 
+        if (!postRes.data.ok) {
+            console.error("메시지 전송 실패:", postRes.data.error);
+            throw new Error(`메시지 전송 실패: ${postRes.data.error}`);
+        }
+
         res.json({ message: "태그 완료!" });
 
     } catch (error) {
-        console.error("오류 발생:", error?.response?.data || error);
-        res.status(500).json({ message: "오류 발생!", error: error?.response?.data || error.message });
+        console.error("상세 오류:", {
+            message: error.message,
+            response: error?.response?.data,
+            stack: error.stack
+        });
+        res.status(500).json({ 
+            message: "오류 발생!", 
+            error: error?.response?.data?.error || error.message 
+        });
     }
 });
 
 app.post("/tag-unreacted-members", async (req, res) => {
     const { messageLink } = req.body;
+
+    if (!messageLink) {
+        return res.status(400).json({ message: "메시지 링크가 필요합니다." });
+    }
 
     // 메시지 링크에서 채널 ID와 timestamp 추출
     const match = messageLink.match(/archives\/(.*?)\/p(\d+)/);
@@ -74,7 +133,10 @@ app.post("/tag-unreacted-members", async (req, res) => {
             params: { channel: channelId }
         });
 
-        if (!membersRes.data.ok) throw new Error("채널 멤버 조회 실패");
+        if (!membersRes.data.ok) {
+            console.error("채널 멤버 조회 실패:", membersRes.data.error);
+            throw new Error(`채널 멤버 조회 실패: ${membersRes.data.error}`);
+        }
 
         const allMembers = membersRes.data.members;
 
@@ -84,7 +146,10 @@ app.post("/tag-unreacted-members", async (req, res) => {
             params: { channel: channelId, latest: threadTs, inclusive: true, limit: 1 }
         });
 
-        if (!messageRes.data.ok) throw new Error("메시지 조회 실패");
+        if (!messageRes.data.ok) {
+            console.error("메시지 조회 실패:", messageRes.data.error);
+            throw new Error(`메시지 조회 실패: ${messageRes.data.error}`);
+        }
 
         const message = messageRes.data.messages[0];
 
@@ -110,7 +175,7 @@ app.post("/tag-unreacted-members", async (req, res) => {
         const mentions = unreactedMembers.map(userId => `<@${userId}>`).join(" ");
 
         // 5. 스레드에 멘션 메시지 작성
-        await axios.post("https://slack.com/api/chat.postMessage", {
+        const postRes = await axios.post("https://slack.com/api/chat.postMessage", {
             channel: channelId,
             thread_ts: threadTs,
             text: `이모지 반응 안 한 사람들: ${mentions}`
@@ -121,11 +186,23 @@ app.post("/tag-unreacted-members", async (req, res) => {
             }
         });
 
+        if (!postRes.data.ok) {
+            console.error("메시지 전송 실패:", postRes.data.error);
+            throw new Error(`메시지 전송 실패: ${postRes.data.error}`);
+        }
+
         res.json({ message: "✅ 반응 안 한 사람 태그 완료!" });
 
     } catch (error) {
-        console.error("오류:", error?.response?.data || error.message);
-        res.status(500).json({ message: "서버 오류 발생", error: error?.response?.data || error.message });
+        console.error("상세 오류:", {
+            message: error.message,
+            response: error?.response?.data,
+            stack: error.stack
+        });
+        res.status(500).json({ 
+            message: "서버 오류 발생", 
+            error: error?.response?.data?.error || error.message 
+        });
     }
 });
 

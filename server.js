@@ -62,11 +62,25 @@ app.post("/tag-members", async (req, res) => {
     const threadTs = `${match[2].slice(0, -6)}.${match[2].slice(-6)}`;
 
     try {
+        // 토큰 유효성 검사
+        const tokenTest = await testSlackToken();
+        if (!tokenTest) {
+            return res.status(401).json({ message: "Slack 토큰이 유효하지 않습니다." });
+        }
+
         // 채널 멤버 조회
         const membersRes = await axios.get("https://slack.com/api/conversations.members", {
-            headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
+            headers: { 
+                Authorization: `Bearer ${SLACK_TOKEN}`,
+                "Accept": "application/json"
+            },
             params: { channel: channelId }
         });
+
+        // 응답 형식 검증
+        if (!membersRes.headers['content-type']?.includes('application/json')) {
+            throw new Error("잘못된 응답 형식입니다.");
+        }
 
         if (!membersRes.data.ok) {
             console.error("Slack API 호출 실패:", membersRes.data.error);
@@ -83,9 +97,15 @@ app.post("/tag-members", async (req, res) => {
         }, {
             headers: {
                 Authorization: `Bearer ${SLACK_TOKEN}`,
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "Accept": "application/json"
             }
         });
+
+        // 응답 형식 검증
+        if (!postRes.headers['content-type']?.includes('application/json')) {
+            throw new Error("잘못된 응답 형식입니다.");
+        }
 
         if (!postRes.data.ok) {
             console.error("메시지 전송 실패:", postRes.data.error);
@@ -100,6 +120,22 @@ app.post("/tag-members", async (req, res) => {
             response: error?.response?.data,
             stack: error.stack
         });
+
+        // 에러 유형에 따른 응답 처리
+        if (error.message.includes("잘못된 응답 형식")) {
+            return res.status(500).json({ 
+                message: "서버 응답 오류", 
+                error: "잘못된 응답 형식을 받았습니다. Slack API 상태를 확인해주세요."
+            });
+        }
+
+        if (error?.response?.status === 401) {
+            return res.status(401).json({ 
+                message: "인증 오류", 
+                error: "Slack 토큰이 유효하지 않습니다."
+            });
+        }
+
         res.status(500).json({ 
             message: "오류 발생!", 
             error: error?.response?.data?.error || error.message 
@@ -127,11 +163,49 @@ app.post("/tag-unreacted-members", async (req, res) => {
     const excludedUserIds = ['U12345678', 'U87654321'];
 
     try {
-        // 1. 채널 멤버 조회
-        const membersRes = await axios.get("https://slack.com/api/conversations.members", {
-            headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
+        // 토큰 유효성 검사
+        const tokenTest = await testSlackToken();
+        if (!tokenTest) {
+            return res.status(401).json({ message: "Slack 토큰이 유효하지 않습니다." });
+        }
+
+        // 1. 채널 정보 조회 (봇이 채널에 있는지 확인)
+        const channelInfoRes = await axios.get("https://slack.com/api/conversations.info", {
+            headers: { 
+                Authorization: `Bearer ${SLACK_TOKEN}`,
+                "Accept": "application/json"
+            },
             params: { channel: channelId }
         });
+
+        // 응답 형식 검증
+        if (!channelInfoRes.headers['content-type']?.includes('application/json')) {
+            throw new Error("잘못된 응답 형식입니다.");
+        }
+
+        if (!channelInfoRes.data.ok) {
+            if (channelInfoRes.data.error === 'not_in_channel') {
+                return res.status(403).json({ 
+                    message: "봇이 채널에 초대되지 않았습니다.",
+                    error: "채널에서 '/invite @봇이름' 명령어를 실행하여 봇을 초대해주세요."
+                });
+            }
+            throw new Error(`채널 정보 조회 실패: ${channelInfoRes.data.error}`);
+        }
+
+        // 2. 채널 멤버 조회
+        const membersRes = await axios.get("https://slack.com/api/conversations.members", {
+            headers: { 
+                Authorization: `Bearer ${SLACK_TOKEN}`,
+                "Accept": "application/json"
+            },
+            params: { channel: channelId }
+        });
+
+        // 응답 형식 검증
+        if (!membersRes.headers['content-type']?.includes('application/json')) {
+            throw new Error("잘못된 응답 형식입니다.");
+        }
 
         if (!membersRes.data.ok) {
             console.error("채널 멤버 조회 실패:", membersRes.data.error);
@@ -140,11 +214,19 @@ app.post("/tag-unreacted-members", async (req, res) => {
 
         const allMembers = membersRes.data.members;
 
-        // 2. 메시지 조회 (리액션 정보 포함)
+        // 3. 메시지 조회 (리액션 정보 포함)
         const messageRes = await axios.get("https://slack.com/api/conversations.history", {
-            headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
+            headers: { 
+                Authorization: `Bearer ${SLACK_TOKEN}`,
+                "Accept": "application/json"
+            },
             params: { channel: channelId, latest: threadTs, inclusive: true, limit: 1 }
         });
+
+        // 응답 형식 검증
+        if (!messageRes.headers['content-type']?.includes('application/json')) {
+            throw new Error("잘못된 응답 형식입니다.");
+        }
 
         if (!messageRes.data.ok) {
             console.error("메시지 조회 실패:", messageRes.data.error);
@@ -153,7 +235,7 @@ app.post("/tag-unreacted-members", async (req, res) => {
 
         const message = messageRes.data.messages[0];
 
-        // 3. 리액션한 사용자 수집
+        // 4. 리액션한 사용자 수집
         const reactedUserIds = [];
         if (message.reactions) {
             message.reactions.forEach(reaction => {
@@ -163,7 +245,7 @@ app.post("/tag-unreacted-members", async (req, res) => {
 
         const reactedSet = new Set(reactedUserIds);
 
-        // 4. 반응하지 않은 멤버 필터링
+        // 5. 반응하지 않은 멤버 필터링
         const unreactedMembers = allMembers.filter(userId => 
             !reactedSet.has(userId) && !excludedUserIds.includes(userId)
         );
@@ -174,7 +256,7 @@ app.post("/tag-unreacted-members", async (req, res) => {
 
         const mentions = unreactedMembers.map(userId => `<@${userId}>`).join(" ");
 
-        // 5. 스레드에 멘션 메시지 작성
+        // 6. 스레드에 멘션 메시지 작성
         const postRes = await axios.post("https://slack.com/api/chat.postMessage", {
             channel: channelId,
             thread_ts: threadTs,
@@ -182,9 +264,15 @@ app.post("/tag-unreacted-members", async (req, res) => {
         }, {
             headers: {
                 Authorization: `Bearer ${SLACK_TOKEN}`,
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "Accept": "application/json"
             }
         });
+
+        // 응답 형식 검증
+        if (!postRes.headers['content-type']?.includes('application/json')) {
+            throw new Error("잘못된 응답 형식입니다.");
+        }
 
         if (!postRes.data.ok) {
             console.error("메시지 전송 실패:", postRes.data.error);
@@ -199,9 +287,28 @@ app.post("/tag-unreacted-members", async (req, res) => {
             response: error?.response?.data,
             stack: error.stack
         });
+
+        // 에러 유형에 따른 응답 처리
+        if (error.message.includes("잘못된 응답 형식")) {
+            return res.status(500).json({ 
+                message: "서버 응답 오류", 
+                error: "잘못된 응답 형식을 받았습니다. Slack API 상태를 확인해주세요."
+            });
+        }
+
+        if (error?.response?.status === 401) {
+            return res.status(401).json({ 
+                message: "인증 오류", 
+                error: "Slack 토큰이 유효하지 않습니다."
+            });
+        }
+
         res.status(500).json({ 
             message: "서버 오류 발생", 
-            error: error?.response?.data?.error || error.message 
+            error: error?.response?.data?.error || error.message,
+            details: error?.response?.data?.error === 'not_in_channel' 
+                ? "채널에서 '/invite @봇이름' 명령어를 실행하여 봇을 초대해주세요."
+                : undefined
         });
     }
 });

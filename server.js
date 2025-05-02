@@ -45,6 +45,11 @@ testSlackToken().then(isValid => {
         console.error("❌ Slack 토큰이 유효하지 않습니다. 서버를 종료합니다.");
         process.exit(1);
     }
+    console.log("✅ 서버 시작 준비 완료");
+    console.log(`✅ 환경 변수 확인:
+    - PORT: ${process.env.PORT || 3000}
+    - SLACK_BOT_TOKEN: ${process.env.SLACK_BOT_TOKEN ? '설정됨' : '설정되지 않음'}
+    `);
 });
 
 app.post("/tag-members", async (req, res) => {
@@ -350,4 +355,11 @@ app.get("/", (req, res) => {
     res.send("백엔드 서버가 정상적으로 실행 중입니다!");
 });
 
-app.listen(PORT, () => console.log(`✅ 서버 실행 중 (PORT: ${PORT})`));
+app.listen(PORT, () => {
+    console.log(`✅ 서버 실행 중 (PORT: ${PORT})`);
+    console.log(`✅ 서버 URL: http://localhost:${PORT}`);
+    console.log(`✅ API 엔드포인트:
+    - POST /tag-members
+    - POST /tag-unreacted-members
+    `);
+});

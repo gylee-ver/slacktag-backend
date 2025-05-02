@@ -52,6 +52,35 @@ testSlackToken().then(isValid => {
     `);
 });
 
+// 실제 사용자 필터링 함수
+async function filterRealUsers(userIds) {
+    const realUsers = [];
+    for (const userId of userIds) {
+        try {
+            const userInfo = await axios.get("https://slack.com/api/users.info", {
+                headers: { 
+                    Authorization: `Bearer ${SLACK_TOKEN}`,
+                    "Accept": "application/json"
+                },
+                params: { user: userId }
+            });
+
+            // 응답 형식 검증
+            if (!userInfo.headers['content-type']?.includes('application/json')) {
+                console.error(`잘못된 응답 형식 (${userId}):`, userInfo.headers['content-type']);
+                continue;
+            }
+
+            if (userInfo.data.ok && userInfo.data.user && !userInfo.data.user.is_bot && !userInfo.data.user.is_app_user) {
+                realUsers.push(userId);
+            }
+        } catch (error) {
+            console.error(`사용자 정보 조회 실패 (${userId}):`, error.message);
+        }
+    }
+    return realUsers;
+}
+
 app.post("/tag-members", async (req, res) => {
     const { messageLink } = req.body;
 
@@ -83,13 +112,6 @@ app.post("/tag-members", async (req, res) => {
             params: { channel: channelId }
         });
 
-        console.log("채널 멤버 조회 응답:", {
-            status: membersRes.status,
-            statusText: membersRes.statusText,
-            headers: membersRes.headers,
-            data: membersRes.data
-        });
-
         // 응답 형식 검증
         if (!membersRes.headers['content-type']?.includes('application/json')) {
             console.error("잘못된 응답 형식:", membersRes.headers['content-type']);
@@ -101,7 +123,16 @@ app.post("/tag-members", async (req, res) => {
             throw new Error(`Slack API 호출 실패: ${membersRes.data.error}`);
         }
 
-        const members = membersRes.data.members.map(user => `<@${user}>`).join(" ");
+        // 실제 사용자만 필터링
+        console.log("실제 사용자 필터링 시작");
+        const realUsers = await filterRealUsers(membersRes.data.members);
+        console.log(`필터링 결과: ${realUsers.length}명의 실제 사용자`);
+
+        if (realUsers.length === 0) {
+            return res.json({ message: "태그할 실제 사용자가 없습니다." });
+        }
+
+        const members = realUsers.map(user => `<@${user}>`).join(" ");
         
         console.log("스레드 메시지 전송 시작:", { channelId, threadTs });
         // 스레드에 멘션 메시지 추가
@@ -115,13 +146,6 @@ app.post("/tag-members", async (req, res) => {
                 "Content-Type": "application/json",
                 "Accept": "application/json"
             }
-        });
-
-        console.log("스레드 메시지 전송 응답:", {
-            status: postRes.status,
-            statusText: postRes.statusText,
-            headers: postRes.headers,
-            data: postRes.data
         });
 
         // 응답 형식 검증
@@ -250,7 +274,14 @@ app.post("/tag-unreacted-members", async (req, res) => {
             throw new Error(`채널 멤버 조회 실패: ${membersRes.data.error}`);
         }
 
-        const allMembers = membersRes.data.members;
+        // 실제 사용자만 필터링
+        console.log("실제 사용자 필터링 시작");
+        const realUsers = await filterRealUsers(membersRes.data.members);
+        console.log(`필터링 결과: ${realUsers.length}명의 실제 사용자`);
+
+        if (realUsers.length === 0) {
+            return res.json({ message: "태그할 실제 사용자가 없습니다." });
+        }
 
         // 3. 메시지 조회 (리액션 정보 포함)
         const messageRes = await axios.get("https://slack.com/api/conversations.history", {
@@ -284,7 +315,7 @@ app.post("/tag-unreacted-members", async (req, res) => {
         const reactedSet = new Set(reactedUserIds);
 
         // 5. 반응하지 않은 멤버 필터링
-        const unreactedMembers = allMembers.filter(userId => 
+        const unreactedMembers = realUsers.filter(userId => 
             !reactedSet.has(userId) && !excludedUserIds.includes(userId)
         );
 

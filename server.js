@@ -68,6 +68,7 @@ app.post("/tag-members", async (req, res) => {
             return res.status(401).json({ message: "Slack 토큰이 유효하지 않습니다." });
         }
 
+        console.log("채널 멤버 조회 시작:", { channelId });
         // 채널 멤버 조회
         const membersRes = await axios.get("https://slack.com/api/conversations.members", {
             headers: { 
@@ -77,8 +78,16 @@ app.post("/tag-members", async (req, res) => {
             params: { channel: channelId }
         });
 
+        console.log("채널 멤버 조회 응답:", {
+            status: membersRes.status,
+            statusText: membersRes.statusText,
+            headers: membersRes.headers,
+            data: membersRes.data
+        });
+
         // 응답 형식 검증
         if (!membersRes.headers['content-type']?.includes('application/json')) {
+            console.error("잘못된 응답 형식:", membersRes.headers['content-type']);
             throw new Error("잘못된 응답 형식입니다.");
         }
 
@@ -89,6 +98,7 @@ app.post("/tag-members", async (req, res) => {
 
         const members = membersRes.data.members.map(user => `<@${user}>`).join(" ");
         
+        console.log("스레드 메시지 전송 시작:", { channelId, threadTs });
         // 스레드에 멘션 메시지 추가
         const postRes = await axios.post("https://slack.com/api/chat.postMessage", {
             channel: channelId,
@@ -102,8 +112,16 @@ app.post("/tag-members", async (req, res) => {
             }
         });
 
+        console.log("스레드 메시지 전송 응답:", {
+            status: postRes.status,
+            statusText: postRes.statusText,
+            headers: postRes.headers,
+            data: postRes.data
+        });
+
         // 응답 형식 검증
         if (!postRes.headers['content-type']?.includes('application/json')) {
+            console.error("잘못된 응답 형식:", postRes.headers['content-type']);
             throw new Error("잘못된 응답 형식입니다.");
         }
 
@@ -118,14 +136,24 @@ app.post("/tag-members", async (req, res) => {
         console.error("상세 오류:", {
             message: error.message,
             response: error?.response?.data,
-            stack: error.stack
+            stack: error.stack,
+            config: {
+                url: error?.config?.url,
+                method: error?.config?.method,
+                headers: error?.config?.headers,
+                data: error?.config?.data
+            }
         });
 
         // 에러 유형에 따른 응답 처리
         if (error.message.includes("잘못된 응답 형식")) {
             return res.status(500).json({ 
                 message: "서버 응답 오류", 
-                error: "잘못된 응답 형식을 받았습니다. Slack API 상태를 확인해주세요."
+                error: "잘못된 응답 형식을 받았습니다. Slack API 상태를 확인해주세요.",
+                details: {
+                    contentType: error?.response?.headers?.['content-type'],
+                    responseData: error?.response?.data
+                }
             });
         }
 
@@ -138,7 +166,12 @@ app.post("/tag-members", async (req, res) => {
 
         res.status(500).json({ 
             message: "오류 발생!", 
-            error: error?.response?.data?.error || error.message 
+            error: error?.response?.data?.error || error.message,
+            details: {
+                status: error?.response?.status,
+                statusText: error?.response?.statusText,
+                data: error?.response?.data
+            }
         });
     }
 });
